@@ -20,6 +20,12 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String API_KEY_HEADER = "X-API-Key";
 
+    private static final String REVIEW_ENDPOINT =
+            "/api/v1/brd/review";
+
+    private static final String HISTORY_ENDPOINT_PREFIX =
+            "/api/v1/brd/reviews/";
+
     private final boolean enabled;
     private final String configuredApiKey;
 
@@ -29,12 +35,31 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
         this.enabled = enabled;
         this.configuredApiKey = configuredApiKey;
+
+        // Never print the actual API key.
+        System.out.println(
+                "API authentication enabled: " + enabled
+                        + ", API key configured: "
+                        + (configuredApiKey != null
+                        && !configuredApiKey.isBlank())
+        );
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !("POST".equalsIgnoreCase(request.getMethod())
-                && "/api/v1/brd/review".equals(request.getRequestURI()));
+
+        String method = request.getMethod();
+        String requestUri = request.getRequestURI();
+
+        boolean reviewRequest =
+                "POST".equalsIgnoreCase(method)
+                        && REVIEW_ENDPOINT.equals(requestUri);
+
+        boolean historyRequest =
+                "GET".equalsIgnoreCase(method)
+                        && requestUri.startsWith(HISTORY_ENDPOINT_PREFIX);
+
+        return !reviewRequest && !historyRequest;
     }
 
     @Override
@@ -49,7 +74,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        // Fail closed if the server has not been configured with a key.
+        // Fail closed when the server has no configured API key.
         if (configuredApiKey == null || configuredApiKey.isBlank()) {
             writeError(
                     response,

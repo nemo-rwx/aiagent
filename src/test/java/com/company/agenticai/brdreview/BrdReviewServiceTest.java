@@ -6,6 +6,7 @@ import com.company.agenticai.brdreview.dto.BrdReviewResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.company.agenticai.brdreview.persistence.BrdReviewRepository;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -14,14 +15,17 @@ class BrdReviewServiceTest {
 
     private OpenRouterClient openRouterClient;
     private BrdReviewService brdReviewService;
+    private BrdReviewRepository brdReviewRepository;
 
     @BeforeEach
     void setUp() {
         openRouterClient = mock(OpenRouterClient.class);
+        brdReviewRepository = mock(BrdReviewRepository.class);
 
         brdReviewService = new BrdReviewService(
                 openRouterClient,
-                new ObjectMapper()
+                new ObjectMapper(),
+                brdReviewRepository
         );
     }
 
@@ -344,6 +348,50 @@ class BrdReviewServiceTest {
                         new BrdReviewRequest(
                                 "The system shall process payments."
                         )
+                )
+        );
+    }
+
+    @Test
+    void shouldRejectCompletenessScoreAbove100() {
+        String aiJson = """
+        {
+          "status": "SUCCESS",
+          "summary": "Review completed.",
+          "completenessScore": 101,
+          "findings": [],
+          "clarificationQuestions": []
+        }
+        """;
+
+        when(openRouterClient.chat(anyString())).thenReturn(aiJson);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> brdReviewService.reviewBrd(
+                        new BrdReviewRequest("The system shall process payments.")
+                )
+        );
+    }
+
+    @Test
+    void shouldRejectNegativeCompletenessScore() {
+        String aiJson = """
+        {
+          "status": "SUCCESS",
+          "summary": "Review completed.",
+          "completenessScore": -1,
+          "findings": [],
+          "clarificationQuestions": []
+        }
+        """;
+
+        when(openRouterClient.chat(anyString())).thenReturn(aiJson);
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> brdReviewService.reviewBrd(
+                        new BrdReviewRequest("The system shall process payments.")
                 )
         );
     }

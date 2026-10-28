@@ -1,11 +1,20 @@
 
 package com.company.agenticai.brdreview.service;
 
+import com.company.agenticai.brdreview.dto.BrdReviewHistoryResponse;
 import com.company.agenticai.brdreview.dto.BrdReviewRequest;
 import com.company.agenticai.brdreview.dto.BrdReviewResponse;
+import com.company.agenticai.brdreview.persistence.BrdClarificationQuestionEntity;
+import com.company.agenticai.brdreview.persistence.BrdFindingEntity;
+import com.company.agenticai.brdreview.persistence.BrdReviewEntity;
+import com.company.agenticai.brdreview.persistence.BrdReviewRepository;
 import com.company.agenticai.brdreview.prompt.BrdReviewPrompt;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashSet;
 import java.util.List;
@@ -16,6 +25,7 @@ public class BrdReviewService {
 
     private final OpenRouterClient openRouterClient;
     private final ObjectMapper objectMapper;
+    private final BrdReviewRepository brdReviewRepository;
 
     private static final List<String> VALID_SEVERITIES =
             List.of("HIGH", "MEDIUM", "LOW");
@@ -34,11 +44,15 @@ public class BrdReviewService {
 
     public BrdReviewService(
             OpenRouterClient openRouterClient,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            BrdReviewRepository brdReviewRepository) {
+
         this.openRouterClient = openRouterClient;
         this.objectMapper = objectMapper;
+        this.brdReviewRepository = brdReviewRepository;
     }
 
+    @Transactional
     public BrdReviewResponse reviewBrd(BrdReviewRequest request) {
 
         if (request == null
@@ -53,22 +67,116 @@ public class BrdReviewService {
         String prompt = BrdReviewPrompt.buildPrompt(brdText);
         String aiResponse = openRouterClient.chat(prompt);
 
+        BrdReviewResponse response;
+
         try {
-            BrdReviewResponse response = objectMapper.readValue(
+            response = objectMapper.readValue(
                     aiResponse,
                     BrdReviewResponse.class
             );
-
-            validateResponse(response, brdText);
-            return response;
-
-        } catch (Exception exception) {
+        } catch (JsonProcessingException exception) {
             throw new IllegalStateException(
-                    "Unable to parse the AI response as a valid BRD review. "
-                            + "Please try again.",
+                    "Unable to parse the AI response as valid JSON. Please try again.",
                     exception
             );
         }
+
+        // Validate the response before persisting any data.
+        validateResponse(response, brdText);
+
+        // Create the parent review record.
+        BrdReviewEntity entity = new BrdReviewEntity(
+                response.status(),
+                response.summary(),
+                response.completenessScore(),
+                brdText
+        );
+
+        // Attach every finding to the review.
+        for (BrdReviewResponse.Finding finding : response.findings()) {
+
+            BrdFindingEntity findingEntity = new BrdFindingEntity(
+                    finding.id(),
+                    finding.category(),
+                    finding.requirementReference(),
+                    finding.title(),
+                    finding.description(),
+                    finding.severity(),
+                    finding.recommendation(),
+                    finding.sourceText()
+            );
+
+            entity.addFinding(findingEntity);
+        }
+
+        // Attach every clarification question to the review.
+        for (String question : response.clarificationQuestions()) {
+
+            BrdClarificationQuestionEntity questionEntity =
+                    new BrdClarificationQuestionEntity(question);
+
+            entity.addClarificationQuestion(questionEntity);
+        }
+
+        // Cascade saves the review and associated child records.
+        brdReviewRepository.save(entity);
+
+        // Preserve the existing review API response format.
+        return response;
+    }
+
+    /**
+     * Retrieves a previously saved BRD review by its database ID.
+     */
+    @Transactional(readOnly = true)
+    public BrdReviewHistoryResponse getReviewById(Long id) {
+
+        if (id == null || id <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Review ID must be a positive number."
+            );
+        }
+
+        BrdReviewEntity entity = brdReviewRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "BRD review not found."
+                ));
+
+        List<BrdReviewHistoryResponse.FindingHistory> findings =
+                entity.getFindings()
+                        .stream()
+                        .map(finding ->
+                                new BrdReviewHistoryResponse.FindingHistory(
+                                        finding.getFindingId(),
+                                        finding.getCategory(),
+                                        finding.getRequirementReference(),
+                                        finding.getTitle(),
+                                        finding.getDescription(),
+                                        finding.getSeverity(),
+                                        finding.getRecommendation(),
+                                        finding.getSourceText()
+                                )
+                        )
+                        .toList();
+
+        List<String> questions =
+                entity.getClarificationQuestions()
+                        .stream()
+                        .map(BrdClarificationQuestionEntity::getQuestion)
+                        .toList();
+
+        return new BrdReviewHistoryResponse(
+                entity.getId(),
+                entity.getStatus(),
+                entity.getSummary(),
+                entity.getCompletenessScore(),
+                entity.getBrdText(),
+                entity.getCreatedAt(),
+                findings,
+                questions
+        );
     }
 
     private void validateResponse(
@@ -82,6 +190,7 @@ public class BrdReviewService {
                 || response.summary().isBlank()
                 || response.findings() == null
                 || response.clarificationQuestions() == null) {
+
             throw new IllegalStateException(
                     "AI returned an incomplete BRD review."
             );
@@ -95,6 +204,7 @@ public class BrdReviewService {
 
         if (response.completenessScore() < 0
                 || response.completenessScore() > 100) {
+
             throw new IllegalStateException(
                     "AI returned a completeness score outside 0-100."
             );
@@ -115,6 +225,7 @@ public class BrdReviewService {
                     || finding.recommendation() == null
                     || finding.recommendation().isBlank()
                     || finding.sourceText() == null) {
+
                 throw new IllegalStateException(
                         "AI returned a finding with missing or empty fields."
                 );
@@ -149,6 +260,7 @@ public class BrdReviewService {
             String reference = finding.requirementReference().trim();
 
             if (!reference.isEmpty()) {
+
                 String[] references = reference.split(",");
 
                 for (String item : references) {
@@ -156,6 +268,7 @@ public class BrdReviewService {
 
                     if (candidate.isEmpty()
                             || !brdText.contains(candidate)) {
+
                         throw new IllegalStateException(
                                 "AI returned an unsupported requirement reference."
                         );
@@ -163,11 +276,11 @@ public class BrdReviewService {
                 }
             }
 
-
-            // Ensure quoted source text occurs in the submitted BRD.
-            // Empty source text is permitted.
+            // Non-empty source text must match the submitted BRD.
+            // Empty source text is allowed for document-level findings.
             if (!finding.sourceText().isBlank()
                     && !brdText.contains(finding.sourceText())) {
+
                 throw new IllegalStateException(
                         "AI returned source text that does not match the BRD."
                 );
@@ -175,6 +288,7 @@ public class BrdReviewService {
         }
 
         for (String question : response.clarificationQuestions()) {
+
             if (question == null || question.isBlank()) {
                 throw new IllegalStateException(
                         "AI returned an empty clarification question."
@@ -184,6 +298,7 @@ public class BrdReviewService {
     }
 
     private void validateFindingId(String id) {
+
         if (!id.matches("BRD-\\d{3,}")) {
             throw new IllegalStateException(
                     "AI response contains an invalid finding ID."
