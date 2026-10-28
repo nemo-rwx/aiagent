@@ -3,6 +3,7 @@ package com.company.agenticai.brdreview.common;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -15,6 +16,7 @@ import org.springframework.web.client.ResourceAccessException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestControllerAdvice
@@ -29,12 +31,10 @@ public class GlobalExceptionHandler {
 
         logger.warn("Invalid request received.");
 
-        return ResponseEntity.badRequest().body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 400,
-                "error", "Bad Request",
-                "message", "The request is invalid. Check the request body and required fields."
-        ));
+        return errorResponse(
+                HttpStatus.BAD_REQUEST,
+                "The request is invalid. Check the request body and required fields."
+        );
     }
 
     @ExceptionHandler({
@@ -47,12 +47,10 @@ public class GlobalExceptionHandler {
         logger.warn("Request validation failed: {}",
                 exception.getClass().getSimpleName());
 
-        return ResponseEntity.badRequest().body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 400,
-                "error", "Bad Request",
-                "message", "The request is invalid. Check the request body and required fields."
-        ));
+        return errorResponse(
+                HttpStatus.BAD_REQUEST,
+                "The request is invalid. Check the request body and required fields."
+        );
     }
 
     @ExceptionHandler(ResourceAccessException.class)
@@ -130,11 +128,19 @@ public class GlobalExceptionHandler {
             HttpStatus status,
             String message) {
 
-        return ResponseEntity.status(status).body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", status.value(),
-                "error", status.getReasonPhrase(),
-                "message", message
-        ));
+        Map<String, Object> body = new LinkedHashMap<>();
+
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", status.value());
+        body.put("error", status.getReasonPhrase());
+        body.put("message", message);
+
+        String correlationId = MDC.get("correlationId");
+
+        if (correlationId != null && !correlationId.isBlank()) {
+            body.put("correlationId", correlationId);
+        }
+
+        return ResponseEntity.status(status).body(body);
     }
 }

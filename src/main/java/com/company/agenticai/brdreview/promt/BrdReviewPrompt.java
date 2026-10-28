@@ -58,8 +58,8 @@ public final class BrdReviewPrompt {
                     {
                       "id": "BRD-001",
                       "category": "Business Rules",
-                      "title": "Finding title",
                       "requirementReference": "FR-001",
+                      "title": "Finding title",
                       "description": "Explanation",
                       "severity": "HIGH",
                       "recommendation": "Suggested improvement",
